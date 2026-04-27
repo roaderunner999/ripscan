@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>RipScan — AI Rip Current Detector</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap');
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --safe:#1D9E75;--warn:#D4900A;--danger:#D85A30;--extreme:#E24B4A;
+    --accent:#378ADD;--panel:rgba(4,20,40,0.92);--muted:rgba(180,210,255,0.6);
+    --border:rgba(55,138,221,0.25);--text:#f0f6ff;
+  }
+  html,body{width:100%;height:100%;background:#000;font-family:'DM Sans',sans-serif;color:var(--text);overflow:hidden;-webkit-font-smoothing:antialiased}
+  #app{width:100vw;height:100vh;height:100dvh;display:flex;flex-direction:column;position:relative;overflow:hidden}
+
+  #camWrap{position:relative;flex:1;background:#000;overflow:hidden}
+  #video{width:100%;height:100%;object-fit:cover;display:block}
+  #overlayCanvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+
+  .rc{position:absolute;width:22px;height:22px;border-color:var(--accent);border-style:solid;opacity:.8}
+  .rc.tl{top:18px;left:18px;border-width:2px 0 0 2px}
+  .rc.tr{top:18px;right:18px;border-width:2px 2px 0 0}
+  .rc.bl{bottom:108px;left:18px;border-width:0 0 2px 2px}
+  .rc.br{bottom:108px;right:18px;border-width:0 2px 2px 0}
+
+  #scanRing{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:80px;height:80px;border-radius:50%;border:1.5px solid var(--accent);opacity:0;pointer-events:none;transition:border-color .3s}
+  #scanRing.scanning{animation:pulse-ring 1.6s ease-out infinite}
+  #scanRing.detected{border-color:#E24B4A}
+  @keyframes pulse-ring{0%{transform:translate(-50%,-50%) scale(.4);opacity:.9}100%{transform:translate(-50%,-50%) scale(2.2);opacity:0}}
+
+  #topBar{position:absolute;top:0;left:0;right:0;padding:max(env(safe-area-inset-top,12px),12px) 16px 10px;background:linear-gradient(to bottom,rgba(0,0,10,.82),transparent);display:flex;justify-content:space-between;align-items:center;pointer-events:none;z-index:10}
+  #appTitle{font-family:'Space Mono',monospace;font-size:14px;font-weight:700;letter-spacing:.12em;color:#fff}
+  #appTitle span{color:var(--accent)}
+  #statusPill{font-family:'Space Mono',monospace;font-size:10px;font-weight:700;letter-spacing:.08em;padding:4px 10px;border-radius:20px;background:rgba(55,138,221,.18);border:.5px solid rgba(55,138,221,.4);color:var(--accent);transition:all .3s}
+  #statusPill.live{background:rgba(29,158,117,.2);border-color:rgba(29,158,117,.5);color:#5DCAA5}
+  #statusPill.alert{background:rgba(226,75,74,.25);border-color:rgba(226,75,74,.6);color:#F09595;animation:blink .7s step-end infinite}
+  @keyframes blink{50%{opacity:.3}}
+
+  /* Risk display */
+  #riskDisplay{position:absolute;left:50%;bottom:108px;transform:translateX(-50%);width:calc(100% - 24px);max-width:420px;z-index:10;display:flex;flex-direction:column;align-items:center;pointer-events:none}
+  #riskBadge{width:100%;border-radius:18px 18px 0 0;padding:14px 20px 12px;display:flex;align-items:center;justify-content:space-between;gap:12px;background:rgba(4,20,40,0.94);border:.5px solid var(--border);border-bottom:none;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);transition:border-color .4s}
+  #riskLeft{display:flex;flex-direction:column;align-items:flex-start;gap:2px}
+  #riskTierLabel{font-family:'Space Mono',monospace;font-size:10px;font-weight:700;letter-spacing:.12em;color:var(--muted)}
+  #riskTierName{font-family:'Space Mono',monospace;font-size:20px;font-weight:700;letter-spacing:.04em;transition:color .4s;line-height:1.1}
+  #riskPercent{font-family:'Space Mono',monospace;font-size:72px;font-weight:700;line-height:1;letter-spacing:-2px;transition:color .5s;flex-shrink:0}
+  #riskPercent sup{font-size:24px;opacity:.7;letter-spacing:0;vertical-align:super}
+  #riskBarWrap{width:100%;height:6px;background:rgba(255,255,255,.1);overflow:hidden}
+  #riskBarFill{height:100%;width:0%;transition:width .7s ease,background .5s}
+  #riskWarning{width:100%;border-radius:0 0 18px 18px;padding:10px 18px;font-size:13px;font-weight:500;line-height:1.35;color:#fff;background:rgba(4,20,40,0.94);border:.5px solid var(--border);border-top:none;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);transition:background .4s,border-color .4s,color .4s;text-align:center}
+
+  #riskBadge.low{border-color:rgba(29,158,117,.5)}
+  #riskBadge.moderate{border-color:rgba(212,144,10,.5)}
+  #riskBadge.high{border-color:rgba(216,90,48,.55)}
+  #riskBadge.extreme{border-color:rgba(226,75,74,.6)}
+  #riskWarning.low{background:rgba(10,42,28,0.94);border-color:rgba(29,158,117,.4);color:#7ddbb8}
+  #riskWarning.moderate{background:rgba(40,28,4,0.94);border-color:rgba(212,144,10,.4);color:#f0c060}
+  #riskWarning.high{background:rgba(42,18,6,0.94);border-color:rgba(216,90,48,.5);color:#f0956a}
+  #riskWarning.extreme{background:rgba(44,8,8,0.94);border-color:rgba(226,75,74,.55);color:#f09090;animation:warn-pulse .9s ease-in-out infinite}
+  @keyframes warn-pulse{0%,100%{opacity:1}50%{opacity:.7}}
+
+  /* Indicators */
+  #indicators{position:absolute;right:12px;top:max(env(safe-area-inset-top,52px),52px);background:var(--panel);border:.5px solid var(--border);border-radius:12px;padding:8px 10px;z-index:10;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);min-width:120px}
+  #indicators .ind-title{font-family:'Space Mono',monospace;font-size:8px;letter-spacing:.1em;color:var(--muted);margin-bottom:6px;font-weight:700}
+  .ind-row{display:flex;align-items:center;gap:5px;margin-bottom:4px;font-size:10px;color:var(--text)}
+  .ind-dot{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.18);flex-shrink:0;transition:background .4s}
+  .ind-dot.active{background:#E24B4A;box-shadow:0 0 6px #E24B4A88}
+  .ind-dot.partial{background:#EF9F27;box-shadow:0 0 6px #EF9F2788}
+  .ind-dot.clear{background:#1D9E75}
+
+  /* Analysis card */
+  #analysisCard{position:absolute;left:12px;right:12px;bottom:200px;background:var(--panel);border:.5px solid var(--border);border-radius:14px;padding:10px 14px;z-index:20;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:none;max-height:160px;overflow-y:auto}
+  #analysisCard.visible{display:block}
+  .card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .card-header span{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.08em;color:var(--muted)}
+  #closeCard{background:none;border:none;cursor:pointer;color:var(--muted);font-size:16px;line-height:1;padding:0 2px;-webkit-tap-highlight-color:transparent}
+  #analysisText{font-size:12px;line-height:1.55;color:var(--text);white-space:pre-wrap}
+
+  /* Start screen */
+  #startScreen{position:absolute;inset:0;background:#000d1a;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 20px;z-index:100;text-align:center;overflow-y:auto}
+  #startScreen.hidden{display:none}
+  #logoImg{width:100%;max-width:460px;border-radius:14px;margin-bottom:20px;box-shadow:0 0 48px rgba(55,138,221,0.22),0 8px 32px rgba(0,0,0,0.6);animation:logoFade .8s ease forwards}
+  @keyframes logoFade{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+  .feature-list{list-style:none;margin-bottom:22px;width:100%;max-width:300px;text-align:left}
+  .feature-list li{display:flex;align-items:center;gap:10px;font-size:13px;color:rgba(180,210,255,.75);margin-bottom:9px}
+  .feature-list li::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0}
+  #startBtn{background:var(--accent);color:#fff;border:none;border-radius:14px;padding:15px 40px;font-family:'Space Mono',monospace;font-size:13px;font-weight:700;letter-spacing:.08em;cursor:pointer;width:100%;max-width:300px;transition:all .2s;-webkit-tap-highlight-color:transparent;box-shadow:0 4px 20px rgba(55,138,221,0.35)}
+  #startBtn:active{transform:scale(.97);background:#185FA5}
+  #serverStatus{font-size:11px;margin-top:10px;color:var(--muted);min-height:16px;font-family:'Space Mono',monospace}
+  .disclaimer{margin-top:14px;font-size:10px;color:rgba(180,210,255,.28);line-height:1.5;max-width:280px}
+
+  /* Controls */
+  #controls{background:var(--panel);border-top:.5px solid var(--border);padding:10px 20px;padding-bottom:max(env(safe-area-inset-bottom,10px),10px);display:flex;align-items:center;justify-content:space-between;gap:12px;z-index:10;flex-shrink:0}
+  .ctrl-side{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:72px}
+  #intervalSel{background:rgba(255,255,255,.06);border:.5px solid var(--border);border-radius:8px;color:var(--text);font-size:11px;padding:4px 6px;cursor:pointer;font-family:'DM Sans',sans-serif;width:100%}
+  .ctrl-label{font-size:10px;color:var(--muted);letter-spacing:.04em}
+
+  /* Scan button */
+  #scanBtn{width:72px;height:72px;border-radius:50%;border:2.5px solid var(--accent);background:rgba(55,138,221,.15);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;transition:all .25s;flex-shrink:0;-webkit-tap-highlight-color:transparent}
+  #scanBtn:active{transform:scale(.93)}
+  #scanBtn.state-ready{border-color:var(--accent);background:rgba(55,138,221,.15);animation:btn-breathe 2.5s ease-in-out infinite}
+  @keyframes btn-breathe{0%,100%{box-shadow:0 0 0 0 rgba(55,138,221,0.4)}50%{box-shadow:0 0 0 10px rgba(55,138,221,0)}}
+  #scanBtn.state-scanning{border-color:#E24B4A;background:rgba(226,75,74,.2);animation:btn-scan 1.4s ease-in-out infinite}
+  @keyframes btn-scan{0%,100%{box-shadow:0 0 0 0 rgba(226,75,74,0.5)}50%{box-shadow:0 0 0 14px rgba(226,75,74,0)}}
+  #scanBtn.state-paused{border-color:rgba(180,210,255,.3);background:rgba(255,255,255,.06);animation:none;box-shadow:none}
+  #scanBtnIcon{font-size:22px;line-height:1;transition:all .2s}
+  #scanBtnLabel{font-family:'Space Mono',monospace;font-size:8px;font-weight:700;letter-spacing:.08em;transition:color .2s}
+  #scanBtn.state-ready #scanBtnLabel{color:var(--accent)}
+  #scanBtn.state-scanning #scanBtnLabel{color:#F09595}
+  #scanBtn.state-paused #scanBtnLabel{color:rgba(180,210,255,.45)}
+
+  .ctrl-btn{display:flex;flex-direction:column;align-items:center;gap:4px;background:none;border:none;cursor:pointer;color:var(--muted);padding:4px 8px;border-radius:10px;transition:all .2s;min-width:52px;-webkit-tap-highlight-color:transparent}
+  .ctrl-btn:active{background:rgba(255,255,255,.08);transform:scale(.95)}
+  .ctrl-btn svg{width:22px;height:22px}
+  .ctrl-btn span{font-size:10px;letter-spacing:.04em}
+
+  #toast{position:absolute;bottom:90px;left:50%;transform:translateX(-50%);background:rgba(200,40,40,.92);color:#fff;font-size:12px;font-family:'Space Mono',monospace;padding:8px 16px;border-radius:12px;white-space:nowrap;z-index:30;display:none;max-width:90vw;text-align:center}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="startScreen">
+    <img id="logoImg" src="ripscan-logo.png" alt="RipScan"
+         onerror="this.style.display='none';document.getElementById('fallbackTitle').style.display='block'"/>
+    <div id="fallbackTitle" style="display:none;font-family:'Space Mono',monospace;font-size:32px;font-weight:700;color:#fff;margin-bottom:20px">RIP<span style="color:var(--accent)">SCAN</span></div>
+    <ul class="feature-list">
+      <li>Live camera analyzed by Claude Vision AI</li>
+      <li>Detects discoloration, foam lines, choppy water & gaps</li>
+      <li>Color-coded risk — green, yellow, orange, red</li>
+      <li>Tap the button to start or pause scanning</li>
+    </ul>
+    <button id="startBtn" onclick="startApp()">Enable Camera</button>
+    <div id="serverStatus"></div>
+    <p class="disclaimer">For educational use only. Always follow lifeguard instructions. Do not rely solely on this app for beach safety decisions.</p>
+  </div>
+
+  <div id="camWrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="overlayCanvas"></canvas>
+    <canvas id="captureCanvas" style="display:none"></canvas>
+    <div class="rc tl"></div><div class="rc tr"></div>
+    <div class="rc bl"></div><div class="rc br"></div>
+    <div id="scanRing"></div>
+
+    <div id="topBar">
+      <div id="appTitle">RIP<span>SCAN</span></div>
+      <div id="statusPill">READY</div>
+    </div>
+
+    <div id="indicators">
+      <div class="ind-title">INDICATORS</div>
+      <div class="ind-row"><div class="ind-dot" id="dot-discolor"></div><span>Discoloration</span></div>
+      <div class="ind-row"><div class="ind-dot" id="dot-foam"></div><span>Foam line</span></div>
+      <div class="ind-row"><div class="ind-dot" id="dot-chop"></div><span>Choppy water</span></div>
+      <div class="ind-row"><div class="ind-dot" id="dot-channel"></div><span>Channel gap</span></div>
+      <div class="ind-row"><div class="ind-dot" id="dot-current"></div><span>Current</span></div>
+      <div class="ind-row"><div class="ind-dot" id="dot-break"></div><span>Wave break</span></div>
+    </div>
+
+    <div id="riskDisplay">
+      <div id="riskBadge">
+        <div id="riskLeft">
+          <div id="riskTierLabel">RIP RISK</div>
+          <div id="riskTierName" style="color:var(--muted)">Not scanning</div>
+        </div>
+        <div id="riskPercent" style="color:var(--muted)">--<sup>%</sup></div>
+      </div>
+      <div id="riskBarWrap"><div id="riskBarFill"></div></div>
+      <div id="riskWarning">Tap the button below to begin scanning.</div>
+    </div>
+
+    <div id="analysisCard">
+      <div class="card-header">
+        <span>FULL ANALYSIS</span>
+        <button id="closeCard" onclick="document.getElementById('analysisCard').classList.remove('visible')">✕</button>
+      </div>
+      <div id="analysisText"></div>
+    </div>
+
+    <div id="toast"></div>
+  </div>
+
+  <div id="controls">
+    <div class="ctrl-side">
+      <select id="intervalSel" onchange="onIntervalChange()">
+        <option value="10000" selected>10s</option>
+        <option value="15000">15s</option>
+        <option value="20000">20s</option>
+        <option value="30000">30s</option>
+      </select>
+      <span class="ctrl-label">Interval</span>
+    </div>
+
+    <button id="scanBtn" class="state-ready" onclick="toggleScan()">
+      <div id="scanBtnIcon">▶</div>
+      <div id="scanBtnLabel">START</div>
+    </button>
+
+    <button class="ctrl-btn" onclick="flipCamera()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M1 4v6h6"/><path d="M23 20v-6h-6"/>
+        <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
+      </svg>
+      <span>Flip</span>
+    </button>
+  </div>
+</div>
+
+<script>
+const API       = '/ripscan/api';
+const sessionId = 'sess_' + Math.random().toString(36).slice(2);
+
+let stream      = null;
+let facingMode  = 'environment';
+let scanTimer   = null;
+let isScanning  = false;   // true while a single scan HTTP call is in flight
+let scanActive  = false;   // true while auto-scan loop is running
+
+const video         = document.getElementById('video');
+const overlayCanvas = document.getElementById('overlayCanvas');
+const captureCanvas = document.getElementById('captureCanvas');
+const octx          = overlayCanvas.getContext('2d');
+const cctx          = captureCanvas.getContext('2d');
+
+const TIERS = {
+  low     : { color:'#1D9E75', bar:'#1D9E75', name:'LOW RISK',  warning:'✓ Conditions look safe. Always swim near a lifeguard.', cls:'low'      },
+  moderate: { color:'#D4900A', bar:'#EFB020', name:'MODERATE',  warning:'⚠ Rip current possible. Stay alert, swim between the flags.', cls:'moderate' },
+  high    : { color:'#D85A30', bar:'#E87040', name:'HIGH RISK', warning:'🚨 Likely rip current. Weak swimmers stay out of water.', cls:'high'     },
+  extreme : { color:'#E24B4A', bar:'#E24B4A', name:'EXTREME',   warning:'🆘 Dangerous rip! Stay out — swim parallel to shore to escape.', cls:'extreme'  },
+};
+
+// ── Health check ──────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  const el = document.getElementById('serverStatus');
+  try {
+    const r = await fetch(API + '/health');
+    const d = await r.json();
+    if (d.ok) { el.style.color='#5DCAA5'; el.textContent='✓ Server connected'; }
+    else throw new Error();
+  } catch { el.style.color='#F09595'; el.textContent='✗ Server unreachable'; }
+});
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+async function startApp() {
+  const btn = document.getElementById('startBtn');
+  btn.textContent = 'Connecting...'; btn.disabled = true;
+  try {
+    const r = await fetch(API + '/health');
+    const d = await r.json();
+    if (!d.ok) throw new Error();
+  } catch {
+    showToast('Cannot reach backend server');
+    btn.textContent = 'Enable Camera'; btn.disabled = false;
+    return;
+  }
+  document.getElementById('startScreen').classList.add('hidden');
+  await openCamera();
+  setScanButton('ready');
+}
+
+async function openCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+    video.srcObject = stream;
+    video.onloadedmetadata = resizeOverlay;
+  } catch {
+    showToast('Camera access denied — allow in browser settings');
+    document.getElementById('startScreen').classList.remove('hidden');
+    document.getElementById('startBtn').textContent = 'Enable Camera';
+    document.getElementById('startBtn').disabled = false;
+  }
+}
+
+function resizeOverlay() {
+  overlayCanvas.width  = video.videoWidth  || video.clientWidth;
+  overlayCanvas.height = video.videoHeight || video.clientHeight;
+  captureCanvas.width  = Math.min(video.videoWidth  || 640, 800);
+  captureCanvas.height = Math.min(video.videoHeight || 480, 600);
+}
+
+function flipCamera() {
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  openCamera();
+}
+
+// ── Toggle START / PAUSE ──────────────────────────────────────────────────────
+function toggleScan() {
+  if (!stream) return;
+
+  if (!scanActive) {
+    // START
+    scanActive = true;
+    setScanButton('scanning');
+    setStatus('SCANNING', 'live');
+    runScan();  // fire immediately then schedule
+  } else {
+    // PAUSE
+    scanActive = false;
+    if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
+    setScanButton('paused');
+    setStatus('PAUSED', '');
+    document.getElementById('riskTierName').textContent = 'Paused';
+    document.getElementById('riskTierName').style.color = 'var(--muted)';
+    document.getElementById('riskWarning').textContent  = 'Tap the button to resume scanning.';
+    document.getElementById('riskWarning').className    = '';
+  }
+}
+
+function onIntervalChange() {
+  // If scanning, restart the timer with new interval
+  if (scanActive && !isScanning) {
+    if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
+    scheduleNext();
+  }
+}
+
+function getIntervalMs() {
+  return parseInt(document.getElementById('intervalSel').value) || 10000;
+}
+
+// ── Schedule next scan AFTER current one finishes ─────────────────────────────
+// Using setTimeout (not setInterval) so scans NEVER overlap
+function scheduleNext() {
+  if (!scanActive) return;
+  scanTimer = setTimeout(runScan, getIntervalMs());
+}
+
+async function runScan() {
+  if (!scanActive || !stream) return;
+
+  // If already scanning (previous call still in flight), just reschedule
+  if (isScanning) { scheduleNext(); return; }
+
+  isScanning = true;
+  document.getElementById('scanRing').className = 'scanning';
+
+  try {
+    const imageData = captureFrame();
+    const data      = await callBackend(imageData);
+    renderResult(data.result);
+  } catch(e) {
+    // Silently swallow 429 rate-limit — just wait for next interval
+    if (e.status === 429) {
+      console.log('[RipScan] Rate limited — skipping, will retry next interval');
+    } else {
+      // Only show toast for real errors
+      setStatus('ERROR', '');
+      showToast(e.message || 'Scan failed — check connection');
+      console.error('[RipScan]', e);
+    }
+  }
+
+  document.getElementById('scanRing').className = '';
+  isScanning = false;
+
+  // Schedule next scan after this one completes — no overlap possible
+  scheduleNext();
+
+  if (scanActive && document.getElementById('statusPill').className !== 'alert') {
+    setStatus('SCANNING', 'live');
+  }
+}
+
+function captureFrame() {
+  cctx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+  return captureCanvas.toDataURL('image/jpeg', 0.80).split(',')[1];
+}
+
+async function callBackend(imageData) {
+  const res = await fetch(API + '/analyze', {
+    method : 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+    body   : JSON.stringify({ imageData, mediaType: 'image/jpeg', sessionId }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    const e = new Error(data.error || `Error ${res.status}`);
+    e.status = res.status;
+    throw e;
+  }
+  return data;
+}
+
+function renderResult(result) {
+  const score = Math.round(Math.max(0, Math.min(100, result.score)));
+  const tier  = TIERS[result.tier] || TIERS.low;
+
+  document.getElementById('riskPercent').innerHTML   = score + '<sup>%</sup>';
+  document.getElementById('riskPercent').style.color = tier.color;
+  document.getElementById('riskTierName').textContent = tier.name;
+  document.getElementById('riskTierName').style.color = tier.color;
+  document.getElementById('riskBadge').className      = tier.cls;
+  document.getElementById('riskBarFill').style.width      = score + '%';
+  document.getElementById('riskBarFill').style.background = `linear-gradient(to right,${tier.bar}88,${tier.bar})`;
+  document.getElementById('riskWarning').textContent  = tier.warning;
+  document.getElementById('riskWarning').className    = tier.cls;
+
+  if (score > 55) setStatus('RIP DETECTED', 'alert');
+  else if (scanActive) setStatus('SCANNING', 'live');
+
+  document.getElementById('scanRing').className = score > 45 ? 'detected' : 'scanning';
+
+  ['discolor','foam','chop','channel','current','break'].forEach(k => {
+    const d = document.getElementById('dot-' + k);
+    if (d) d.className = 'ind-dot ' + (result.indicators?.[k] ? (score > 60 ? 'active' : 'partial') : 'clear');
+  });
+
+  drawOverlays(result.zones || []);
+
+  const full = (result.summary||'') + (result.escape&&result.escape!=='N/A'?'\n\nIf caught: '+result.escape:'');
+  document.getElementById('analysisText').textContent = full;
+  if (score > 60) document.getElementById('analysisCard').classList.add('visible');
+  else            document.getElementById('analysisCard').classList.remove('visible');
+}
+
+function drawOverlays(zones) {
+  const W = overlayCanvas.width||video.clientWidth, H = overlayCanvas.height||video.clientHeight;
+  overlayCanvas.width=W; overlayCanvas.height=H; octx.clearRect(0,0,W,H);
+  if (!zones?.length) return;
+  const rc={low:'#1D9E75',mod:'#EF9F27',high:'#E24B4A'};
+  zones.forEach(z=>{
+    const x=z.x*W,y=z.y*H,w=(z.w||.2)*W,h=(z.h||.15)*H,col=rc[z.risk]||'#378ADD';
+    octx.strokeStyle=col;octx.lineWidth=2.5;octx.strokeRect(x,y,w,h);
+    octx.fillStyle=col+'20';octx.fillRect(x,y,w,h);
+    if(z.label){octx.fillStyle=col;octx.font='bold 12px Space Mono,monospace';octx.fillText(z.label.toUpperCase(),x+8,y+18);}
+  });
+}
+
+function setScanButton(state) {
+  const btn=document.getElementById('scanBtn'), icon=document.getElementById('scanBtnIcon'), lbl=document.getElementById('scanBtnLabel');
+  btn.className='state-'+state;
+  if(state==='ready')   { icon.textContent='▶'; lbl.textContent='START'; }
+  if(state==='scanning'){ icon.textContent='⏸'; lbl.textContent='PAUSE'; }
+  if(state==='paused')  { icon.textContent='▶'; lbl.textContent='RESUME'; }
+}
+
+function setStatus(text,cls) {
+  const p=document.getElementById('statusPill'); p.textContent=text; p.className=cls||'';
+}
+
+let toastTimer;
+function showToast(msg) {
+  const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block';
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>{t.style.display='none';},4500);
+}
+
+window.addEventListener('resize', resizeOverlay);
+</script>
+</body>
+</html>
